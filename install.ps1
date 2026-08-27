@@ -15,6 +15,32 @@ $InstallDirectory = [IO.Path]::GetFullPath($InstallDirectory)
 $InstallPath = Join-Path $InstallDirectory "$Program.exe"
 $ServerAddress = if ($env:KNOT_ADDR) { $env:KNOT_ADDR } else { "127.0.0.1:7330" }
 $ServerUrl = "http://$ServerAddress"
+$AutoStartRegistryPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+$AutoStartEntryName = "Knot Server"
+
+function Enable-KnotAutoStart {
+    $escapedInstallPath = $InstallPath.Replace("'", "''")
+    $escapedServerAddress = $ServerAddress.Replace("'", "''")
+    $startupScript = "& '$escapedInstallPath' serve --addr '$escapedServerAddress' --no-open"
+    $encodedStartupScript = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($startupScript))
+    $startupCommand = "powershell.exe -NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand $encodedStartupScript"
+
+    New-Item -Path $AutoStartRegistryPath -Force | Out-Null
+    New-ItemProperty `
+        -Path $AutoStartRegistryPath `
+        -Name $AutoStartEntryName `
+        -Value $startupCommand `
+        -PropertyType String `
+        -Force | Out-Null
+    Write-Host "Knot Server will start automatically when you sign in."
+}
+
+function Disable-KnotAutoStart {
+    Remove-ItemProperty `
+        -Path $AutoStartRegistryPath `
+        -Name $AutoStartEntryName `
+        -ErrorAction SilentlyContinue
+}
 
 function Start-ManagedKnot {
     if ($NoStart) {
@@ -82,6 +108,8 @@ function Update-UserPath([bool]$Remove) {
 }
 
 if ($Uninstall) {
+    Disable-KnotAutoStart
+
     if (-not (Test-Path -LiteralPath $InstallPath -PathType Leaf)) {
         Write-Host "Knot is not installed at $InstallPath."
         return
@@ -152,6 +180,7 @@ if (Test-Path -LiteralPath $InstallPath -PathType Leaf) {
 if ($CurrentVersion -eq $TargetVersion) {
     Write-Host "Knot $TargetVersion is already installed at $InstallPath."
     Update-UserPath $false
+    Enable-KnotAutoStart
     Start-ManagedKnot
     return
 }
@@ -204,5 +233,6 @@ finally {
 }
 
 Update-UserPath $false
+Enable-KnotAutoStart
 Write-Host "Knot $TargetVersion installed at $InstallPath."
 Start-ManagedKnot

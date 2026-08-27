@@ -13,6 +13,13 @@ PID_FILE="${STATE_DIR}/server.pid"
 LOG_FILE="${STATE_DIR}/server.log"
 SERVER_ADDR="${KNOT_ADDR:-127.0.0.1:7330}"
 SERVER_URL="http://${SERVER_ADDR}"
+HOST_OS="$(uname -s)"
+SYSTEMD_SERVICE_NAME="knot.service"
+SYSTEMD_USER_DIR="${XDG_CONFIG_HOME:-${HOME}/.config}/systemd/user"
+SYSTEMD_SERVICE_FILE="${SYSTEMD_USER_DIR}/${SYSTEMD_SERVICE_NAME}"
+LAUNCHD_LABEL="projects.knot.knote"
+LAUNCH_AGENT_DIR="${HOME}/Library/LaunchAgents"
+LAUNCH_AGENT_FILE="${LAUNCH_AGENT_DIR}/${LAUNCHD_LABEL}.plist"
 
 say() {
   printf '%s\n' "$*"
@@ -31,8 +38,8 @@ usage() {
   printf '%s\n' \
     "Usage: install.sh [--uninstall]" \
     "" \
-    "With no argument, install or upgrade Knot and start the server." \
-    "With --uninstall, stop the managed server and remove the executable." \
+    "With no argument, install or upgrade Knot, enable login startup, and start the server." \
+    "With --uninstall, stop the managed server and remove its startup entry and executable." \
     "No root or sudo access is used."
 }
 
@@ -46,6 +53,147 @@ managed_binary() {
 
 server_is_ready() {
   curl -fsS --max-time 2 "${SERVER_URL}/api/auth/status" >/dev/null 2>&1
+}
+
+systemd_escape() {
+  printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/%/%%/g'
+}
+
+xml_escape() {
+  printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+}
+
+stop_auto_start() {
+  case "${HOST_OS}" in
+    Linux)
+      if command -v systemctl >/dev/null 2>&1 && [ -f "${SYSTEMD_SERVICE_FILE}" ]; then
+        systemctl --user stop "${SYSTEMD_SERVICE_NAME}" >/dev/null 2>&1 || true
+      fi
+      ;;
+    Darwin)
+      if command -v launchctl >/dev/null 2>&1 && [ -f "${LAUNCH_AGENT_FILE}" ]; then
+        launchctl bootout "gui/$(id -u)" "${LAUNCH_AGENT_FILE}" >/dev/null 2>&1 || true
+      fi
+      ;;
+  esac
+}
+
+remove_auto_start() {
+  case "${HOST_OS}" in
+    Linux)
+      had_auto_start="false"
+      if [ -f "${SYSTEMD_SERVICE_FILE}" ]; then
+        had_auto_start="true"
+      fi
+      if command -v systemctl >/dev/null 2>&1; then
+        systemctl --user disable --now "${SYSTEMD_SERVICE_NAME}" >/dev/null 2>&1 || true
+      fi
+      rm -f -- "${SYSTEMD_SERVICE_FILE}"
+      rm -f -- "${SYSTEMD_USER_DIR}/default.target.wants/${SYSTEMD_SERVICE_NAME}"
+      if command -v systemctl >/dev/null 2>&1; then
+        systemctl --user daemon-reload >/dev/null 2>&1 || true
+      fi
+      if [ "${had_auto_start}" = "true" ]; then
+        say "Removed Knot systemd user service."
+      fi
+      ;;
+    Darwin)
+      had_auto_start="false"
+      if [ -f "${LAUNCH_AGENT_FILE}" ]; then
+        had_auto_start="true"
+      fi
+      stop_auto_start
+      rm -f -- "${LAUNCH_AGENT_FILE}"
+      if [ "${had_auto_start}" = "true" ]; then
+        say "Removed Knot LaunchAgent."
+      fi
+      ;;
+  esac
+}
+
+enable_auto_start() {
+  knot_path="$1"
+  require_command sed
+
+  case "${HOST_OS}" in
+    Linux)
+      require_command systemctl
+      mkdir -p "${SYSTEMD_USER_DIR}"
+      escaped_knot_path="$(systemd_escape "${knot_path}")"
+      escaped_server_addr="$(systemd_escape "${SERVER_ADDR}")"
+      escaped_service_path="$(systemd_escape "${PATH}")"
+      cat >"${SYSTEMD_SERVICE_FILE}" <<EOF
+[Unit]
+Description=Knot Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment="PATH=${escaped_service_path}"
+ExecStart="${escaped_knot_path}" serve --addr "${escaped_server_addr}" --no-open
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+EOF
+      systemctl --user daemon-reload || fail "systemd user manager is unavailable"
+      systemctl --user enable "${SYSTEMD_SERVICE_NAME}" >/dev/null || fail "could not enable Knot systemd user service"
+      say "Knot Server will start automatically when you sign in."
+      ;;
+    Darwin)
+      require_command launchctl
+      require_command id
+      mkdir -p "${LAUNCH_AGENT_DIR}" "${STATE_DIR}"
+      escaped_knot_path="$(xml_escape "${knot_path}")"
+      escaped_server_addr="$(xml_escape "${SERVER_ADDR}")"
+      escaped_log_file="$(xml_escape "${LOG_FILE}")"
+      escaped_service_path="$(xml_escape "${PATH}")"
+      cat >"${LAUNCH_AGENT_FILE}" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${LAUNCHD_LABEL}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${escaped_knot_path}</string>
+    <string>serve</string>
+    <string>--addr</string>
+    <string>${escaped_server_addr}</string>
+    <string>--no-open</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>${escaped_service_path}</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>${escaped_log_file}</string>
+  <key>StandardErrorPath</key>
+  <string>${escaped_log_file}</string>
+  <key>ThrottleInterval</key>
+  <integer>5</integer>
+</dict>
+</plist>
+EOF
+      say "Knot Server will start automatically when you sign in."
+      ;;
+    *)
+      fail "unsupported operating system: ${HOST_OS}"
+      ;;
+  esac
 }
 
 stop_knot() {
@@ -95,7 +243,6 @@ stop_knot() {
 }
 
 start_knot() {
-  knot_path="$1"
   if [ "${KNOT_NO_START:-}" = "1" ]; then
     return
   fi
@@ -104,39 +251,42 @@ start_knot() {
     return
   fi
 
-  require_command nohup
-  mkdir -p "${STATE_DIR}"
   say "Starting Knot Server at ${SERVER_URL}..."
-  nohup "${knot_path}" serve --addr "${SERVER_ADDR}" --no-open >"${LOG_FILE}" 2>&1 &
-  server_pid=$!
-  printf '%s\n' "${server_pid}" >"${PID_FILE}"
+  case "${HOST_OS}" in
+    Linux)
+      systemctl --user start "${SYSTEMD_SERVICE_NAME}" || fail "could not start Knot systemd user service"
+      ;;
+    Darwin)
+      launchctl bootstrap "gui/$(id -u)" "${LAUNCH_AGENT_FILE}" || fail "could not load Knot LaunchAgent"
+      ;;
+    *)
+      fail "unsupported operating system: ${HOST_OS}"
+      ;;
+  esac
 
   attempts=0
   while [ "${attempts}" -lt 30 ]; do
     if server_is_ready; then
-      say "Knot Server started (PID ${server_pid})."
-      say "Log: ${LOG_FILE}"
+      say "Knot Server started in the background."
       return
-    fi
-    if ! kill -0 "${server_pid}" 2>/dev/null; then
-      rm -f -- "${PID_FILE}"
-      if command -v tail >/dev/null 2>&1; then
-        tail -n 20 "${LOG_FILE}" >&2 || true
-      fi
-      fail "Knot Server exited before becoming ready"
     fi
     sleep 1
     attempts=$((attempts + 1))
   done
 
-  kill "${server_pid}" 2>/dev/null || true
-  rm -f -- "${PID_FILE}"
+  if [ "${HOST_OS}" = "Darwin" ] && command -v tail >/dev/null 2>&1; then
+    tail -n 20 "${LOG_FILE}" >&2 || true
+  elif [ "${HOST_OS}" = "Linux" ]; then
+    systemctl --user status "${SYSTEMD_SERVICE_NAME}" --no-pager >&2 || true
+  fi
+  stop_auto_start
   fail "Knot Server did not become ready within 30 seconds"
 }
 
 uninstall_knot() {
   installed_path="$(managed_binary)"
   if [ -z "${installed_path}" ]; then
+    remove_auto_start
     say "Knot is not installed."
     return
   fi
@@ -152,6 +302,7 @@ uninstall_knot() {
     *) fail "${installed_path} does not identify itself as Knot" ;;
   esac
 
+  remove_auto_start
   stop_knot "${installed_path}"
   installed_dir="$(dirname "${installed_path}")"
   [ -w "${installed_dir}" ] || fail "cannot remove ${installed_path} without elevated permission"
@@ -169,10 +320,10 @@ install_or_upgrade() {
   require_command awk
   require_command mktemp
 
-  case "$(uname -s)" in
+  case "${HOST_OS}" in
     Linux) target_os="linux" ;;
     Darwin) target_os="darwin" ;;
-    *) fail "unsupported operating system: $(uname -s)" ;;
+    *) fail "unsupported operating system: ${HOST_OS}" ;;
   esac
 
   case "$(uname -m)" in
@@ -212,7 +363,10 @@ install_or_upgrade() {
 
   if [ "${current_version}" = "${target_version}" ]; then
     say "Knot ${target_version} is already installed at ${INSTALL_PATH}."
-    start_knot "${INSTALL_PATH}"
+    stop_auto_start
+    stop_knot "${INSTALL_PATH}"
+    enable_auto_start "${INSTALL_PATH}"
+    start_knot
     return
   fi
 
@@ -271,6 +425,7 @@ install_or_upgrade() {
   [ "${downloaded_version}" = "${target_version}" ] || fail "downloaded binary failed version verification"
 
   if [ "${upgrading}" = "true" ]; then
+    stop_auto_start
     stop_knot "${INSTALL_PATH}"
   fi
 
@@ -289,7 +444,8 @@ install_or_upgrade() {
 
   cleanup
   temporary_dir=""
-  start_knot "${INSTALL_PATH}"
+  enable_auto_start "${INSTALL_PATH}"
+  start_knot
 }
 
 case "${1:-}" in
