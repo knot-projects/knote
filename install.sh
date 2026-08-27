@@ -4,6 +4,8 @@ set -eu
 
 REPOSITORY="knot-projects/knote"
 PROGRAM="knot"
+SERVER_ADDR="${KNOT_ADDR:-127.0.0.1:7330}"
+SERVER_URL="http://${SERVER_ADDR}"
 
 say() {
   printf '%s\n' "$*"
@@ -17,6 +19,75 @@ fail() {
 require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "required command not found: $1"
 }
+
+usage() {
+  printf '%s\n' \
+    "Usage: install.sh [--uninstall]" \
+    "" \
+    "With no argument, install or upgrade Knot and start the server." \
+    "With --uninstall, remove the Knot executable and keep user data."
+}
+
+uninstall_knot() {
+  installed_path="$(command -v "${PROGRAM}" 2>/dev/null || true)"
+  if [ -z "${installed_path}" ]; then
+    say "Knot is not installed."
+    return
+  fi
+
+  case "${installed_path}" in
+    /*) ;;
+    *) fail "cannot safely remove command at ${installed_path}" ;;
+  esac
+
+  installed_identity="$("${installed_path}" version 2>/dev/null || true)"
+  case "${installed_identity}" in
+    knot\ *) ;;
+    *) fail "${installed_path} does not identify itself as Knot" ;;
+  esac
+
+  installed_dir="$(dirname "${installed_path}")"
+  if [ -w "${installed_dir}" ]; then
+    rm -f -- "${installed_path}"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo rm -f -- "${installed_path}"
+  else
+    fail "cannot remove ${installed_path}; rerun with sufficient permission"
+  fi
+
+  say "Knot executable removed from ${installed_path}."
+  say "User data was kept."
+}
+
+start_knot() {
+  knot_path="$1"
+  if [ "${KNOT_NO_START:-}" = "1" ]; then
+    return
+  fi
+  if curl -fsS --max-time 2 "${SERVER_URL}/api/auth/status" >/dev/null 2>&1; then
+    say "Knot Server is already running at ${SERVER_URL}."
+    return
+  fi
+  say "Starting Knot Server at ${SERVER_URL} (press Ctrl+C to stop)..."
+  exec "${knot_path}" serve --addr "${SERVER_ADDR}" --no-open
+}
+
+case "${1:-}" in
+  "") ;;
+  --uninstall)
+    [ "$#" -eq 1 ] || fail "--uninstall does not accept additional arguments"
+    uninstall_knot
+    exit 0
+    ;;
+  -h|--help)
+    usage
+    exit 0
+    ;;
+  *)
+    usage >&2
+    fail "unknown argument: $1"
+    ;;
+esac
 
 require_command curl
 require_command install
@@ -54,6 +125,7 @@ fi
 
 if [ "${current_version}" = "${target_version}" ]; then
   say "Knot ${target_version} is already installed at ${current_path}."
+  start_knot "${current_path}"
   exit 0
 fi
 
@@ -69,7 +141,9 @@ download_base="https://github.com/${REPOSITORY}/releases/download/${release_tag}
 temporary_dir="$(mktemp -d "${TMPDIR:-/tmp}/knot-install.XXXXXX")"
 
 cleanup() {
-  rm -rf -- "${temporary_dir}"
+  if [ -n "${temporary_dir:-}" ] && [ -d "${temporary_dir}" ]; then
+    rm -rf -- "${temporary_dir}"
+  fi
 }
 trap cleanup EXIT HUP INT TERM
 
@@ -132,3 +206,7 @@ case ":${PATH}:" in
   *:"${install_dir}":*) ;;
   *) say "Add ${install_dir} to PATH before running knot." ;;
 esac
+
+cleanup
+temporary_dir=""
+start_knot "${install_path}"
