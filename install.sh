@@ -163,8 +163,8 @@ uninstall_knot() {
 
 install_or_upgrade() {
   require_command curl
+  require_command chmod
   require_command install
-  require_command tar
   require_command uname
   require_command awk
   require_command mktemp
@@ -223,8 +223,7 @@ install_or_upgrade() {
     say "Installing Knot ${target_version}..."
   fi
 
-  package_name="knot-${release_tag}-${target_os}-${target_arch}"
-  archive_name="${package_name}.tar.gz"
+  asset_name="knot-${release_tag}-${target_os}-${target_arch}"
   download_base="https://github.com/${REPOSITORY}/releases/download/${release_tag}"
   temporary_dir="$(mktemp -d "${TMPDIR:-/tmp}/knot-install.XXXXXX")"
 
@@ -235,7 +234,7 @@ install_or_upgrade() {
   }
   trap cleanup EXIT HUP INT TERM
 
-  asset_marker="\"name\":\"${archive_name}\""
+  asset_marker="\"name\":\"${asset_name}\""
   expected_checksum="$(
     printf '%s\n' "${release_json}" |
       awk -v marker="${asset_marker}" '{
@@ -249,26 +248,27 @@ install_or_upgrade() {
       }'
   )"
   case "${expected_checksum}" in
-    ""|*[!0-9a-f]*) fail "GitHub release metadata has no valid SHA-256 digest for ${archive_name}" ;;
+    ""|*[!0-9a-f]*) fail "GitHub release metadata has no valid SHA-256 digest for ${asset_name}" ;;
   esac
-  [ "${#expected_checksum}" -eq 64 ] || fail "GitHub release metadata has an invalid SHA-256 digest for ${archive_name}"
+  [ "${#expected_checksum}" -eq 64 ] || fail "GitHub release metadata has an invalid SHA-256 digest for ${asset_name}"
 
-  curl -fsSL --retry 3 --retry-delay 1 -o "${temporary_dir}/${archive_name}" "${download_base}/${archive_name}"
+  source_binary="${temporary_dir}/${asset_name}"
+  curl -fsSL --retry 3 --retry-delay 1 -o "${source_binary}" "${download_base}/${asset_name}"
 
   if command -v sha256sum >/dev/null 2>&1; then
-    actual_checksum="$(sha256sum "${temporary_dir}/${archive_name}" | awk '{ print $1 }')"
+    actual_checksum="$(sha256sum "${source_binary}" | awk '{ print $1 }')"
   elif command -v shasum >/dev/null 2>&1; then
-    actual_checksum="$(shasum -a 256 "${temporary_dir}/${archive_name}" | awk '{ print $1 }')"
+    actual_checksum="$(shasum -a 256 "${source_binary}" | awk '{ print $1 }')"
   else
     fail "sha256sum or shasum is required to verify the download"
   fi
 
-  [ "${actual_checksum}" = "${expected_checksum}" ] || fail "checksum verification failed for ${archive_name}"
+  [ "${actual_checksum}" = "${expected_checksum}" ] || fail "checksum verification failed for ${asset_name}"
   say "Checksum verified against GitHub release metadata."
 
-  tar -xzf "${temporary_dir}/${archive_name}" -C "${temporary_dir}"
-  source_binary="${temporary_dir}/${package_name}/${PROGRAM}"
-  [ -f "${source_binary}" ] || fail "downloaded archive does not contain ${PROGRAM}"
+  chmod 0755 "${source_binary}"
+  downloaded_version="$("${source_binary}" version 2>/dev/null | awk 'NR == 1 { print $2 }' || true)"
+  [ "${downloaded_version}" = "${target_version}" ] || fail "downloaded binary failed version verification"
 
   if [ "${upgrading}" = "true" ]; then
     stop_knot "${INSTALL_PATH}"

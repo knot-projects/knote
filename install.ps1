@@ -118,16 +118,15 @@ if ($ReleaseTag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') {
     throw "Could not determine the latest release"
 }
 $TargetVersion = $ReleaseTag.Substring(1)
-$PackageName = "knot-$ReleaseTag-windows-$TargetArchitecture"
-$ArchiveName = "$PackageName.tar.gz"
-$matchingAssets = @($release.assets | Where-Object { $_.name -eq $ArchiveName })
+$AssetName = "knot-$ReleaseTag-windows-$TargetArchitecture.exe"
+$matchingAssets = @($release.assets | Where-Object { $_.name -eq $AssetName })
 if ($matchingAssets.Count -ne 1) {
-    throw "Release $ReleaseTag does not contain $ArchiveName"
+    throw "Release $ReleaseTag does not contain $AssetName"
 }
 $asset = $matchingAssets[0]
 $digest = [string]$asset.digest
 if ($digest -notmatch '^sha256:([0-9a-fA-F]{64})$') {
-    throw "GitHub release metadata has no valid SHA-256 digest for $ArchiveName"
+    throw "GitHub release metadata has no valid SHA-256 digest for $AssetName"
 }
 $ExpectedChecksum = $Matches[1].ToLowerInvariant()
 
@@ -154,32 +153,22 @@ else {
 $TemporaryDirectory = Join-Path ([IO.Path]::GetTempPath()) ("knot-install-" + [Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $TemporaryDirectory | Out-Null
 try {
-    $ArchivePath = Join-Path $TemporaryDirectory $ArchiveName
+    $SourceBinary = Join-Path $TemporaryDirectory $AssetName
     Invoke-WebRequest `
         -Uri ([string]$asset.browser_download_url) `
-        -OutFile $ArchivePath `
+        -OutFile $SourceBinary `
         -Headers @{ Accept = "application/octet-stream" } `
         -UserAgent "Knot-Installer" `
         -UseBasicParsing
 
-    $ActualChecksum = (Get-FileHash -LiteralPath $ArchivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $ActualChecksum = (Get-FileHash -LiteralPath $SourceBinary -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($ActualChecksum -ne $ExpectedChecksum) {
-        throw "Checksum verification failed for $ArchiveName"
+        throw "Checksum verification failed for $AssetName"
     }
     Write-Host "Checksum verified against GitHub release metadata."
 
-    $tarCommand = Get-Command tar.exe -ErrorAction SilentlyContinue
-    if (-not $tarCommand) {
-        throw "tar.exe is required to extract $ArchiveName"
-    }
-    & $tarCommand.Source -xzf $ArchivePath -C $TemporaryDirectory
-    if ($LASTEXITCODE -ne 0) {
-        throw "Could not extract $ArchiveName"
-    }
-
-    $SourceBinary = Join-Path (Join-Path $TemporaryDirectory $PackageName) "$Program.exe"
     if (-not (Test-Path -LiteralPath $SourceBinary -PathType Leaf)) {
-        throw "Downloaded archive does not contain $Program.exe"
+        throw "Downloaded asset is missing $Program.exe"
     }
     $DownloadedIdentity = (& $SourceBinary version 2>$null | Out-String).Trim()
     if ($DownloadedIdentity -ne "knot $TargetVersion") {

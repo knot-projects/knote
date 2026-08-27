@@ -32,4 +32,4 @@ Windows（PowerShell）：
 
 ## 手动下载
 
-可以在 [GitHub Releases](https://github.com/knot-projects/knote/releases/latest) 下载 Linux、macOS 或 Windows 对应架构的压缩包。
+可以在 [GitHub Releases](https://github.com/knot-projects/knote/releases/latest) 下载 Linux、macOS 或 Windows 对应架构的可执行文件。
