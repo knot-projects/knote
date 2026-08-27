@@ -4,16 +4,34 @@
 
 ## 安装
 
+Linux / macOS：
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/knot-projects/knote/main/install.sh | sh
 ```
 
+Windows（PowerShell）：
+
+```powershell
+irm https://raw.githubusercontent.com/knot-projects/knote/main/install.ps1 | iex
+```
+
+> 当前的 `v0.1.4` 还不含 Windows 资产；此命令将在首次含 Windows 产物的 Release 发布后生效。
+
 ## 卸载
+
+Linux / macOS：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/knot-projects/knote/main/install.sh | sh -s -- --uninstall
 ```
 
+Windows（PowerShell）：
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/knot-projects/knote/main/install.ps1))) -Uninstall
+```
+
 ## 手动下载
 
-可以在 [GitHub Releases](https://github.com/knot-projects/knote/releases/latest) 下载对应平台的压缩包及 `SHA256SUMS`。
+可以在 [GitHub Releases](https://github.com/knot-projects/knote/releases/latest) 下载 Linux、macOS 或 Windows 对应架构的压缩包。安装脚本会根据 GitHub Release 资产元数据自动校验 SHA-256 摘要。
