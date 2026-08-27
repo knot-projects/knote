@@ -72,23 +72,7 @@ start_knot() {
   exec "${knot_path}" serve --addr "${SERVER_ADDR}" --no-open
 }
 
-case "${1:-}" in
-  "") ;;
-  --uninstall)
-    [ "$#" -eq 1 ] || fail "--uninstall does not accept additional arguments"
-    uninstall_knot
-    exit 0
-    ;;
-  -h|--help)
-    usage
-    exit 0
-    ;;
-  *)
-    usage >&2
-    fail "unknown argument: $1"
-    ;;
-esac
-
+install_or_upgrade() {
 require_command curl
 require_command install
 require_command tar
@@ -210,3 +194,21 @@ esac
 cleanup
 temporary_dir=""
 start_knot "${install_path}"
+}
+
+case "${1:-}" in
+  "")
+    install_or_upgrade
+    ;;
+  --uninstall)
+    [ "$#" -eq 1 ] || fail "--uninstall does not accept additional arguments"
+    uninstall_knot
+    ;;
+  -h|--help)
+    usage
+    ;;
+  *)
+    usage >&2
+    fail "unknown argument: $1"
+    ;;
+esac
