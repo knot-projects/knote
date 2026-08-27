@@ -181,8 +181,23 @@ install_or_upgrade() {
     *) fail "unsupported architecture: $(uname -m)" ;;
   esac
 
-  latest_url="$(curl -fsSL -o /dev/null -w '%{url_effective}' "https://github.com/${REPOSITORY}/releases/latest")"
-  release_tag="${latest_url##*/}"
+  release_json="$(curl -fsSL --retry 3 --retry-delay 1 \
+    -H "Accept: application/vnd.github+json" \
+    -H "X-GitHub-Api-Version: 2022-11-28" \
+    -H "User-Agent: Knot-Installer" \
+    "https://api.github.com/repos/${REPOSITORY}/releases/latest")"
+  release_tag="$(
+    printf '%s\n' "${release_json}" |
+      awk '{
+        marker = "\"tag_name\":"
+        start = index($0, marker)
+        if (start == 0) exit
+        value = substr($0, start + length(marker))
+        sub(/^[[:space:]]*\"/, "", value)
+        finish = index(value, "\"")
+        if (finish > 1) print substr(value, 1, finish - 1)
+      }'
+  )"
   case "${release_tag}" in
     v[0-9]*) ;;
     *) fail "could not determine the latest release" ;;
@@ -220,11 +235,25 @@ install_or_upgrade() {
   }
   trap cleanup EXIT HUP INT TERM
 
-  curl -fsSL --retry 3 --retry-delay 1 -o "${temporary_dir}/${archive_name}" "${download_base}/${archive_name}"
-  curl -fsSL --retry 3 --retry-delay 1 -o "${temporary_dir}/SHA256SUMS" "${download_base}/SHA256SUMS"
+  asset_marker="\"name\":\"${archive_name}\""
+  expected_checksum="$(
+    printf '%s\n' "${release_json}" |
+      awk -v marker="${asset_marker}" '{
+        start = index($0, marker)
+        if (start == 0) exit
+        value = substr($0, start + length(marker))
+        digest_marker = "\"digest\":\"sha256:"
+        digest_start = index(value, digest_marker)
+        if (digest_start == 0) exit
+        print substr(value, digest_start + length(digest_marker), 64)
+      }'
+  )"
+  case "${expected_checksum}" in
+    ""|*[!0-9a-f]*) fail "GitHub release metadata has no valid SHA-256 digest for ${archive_name}" ;;
+  esac
+  [ "${#expected_checksum}" -eq 64 ] || fail "GitHub release metadata has an invalid SHA-256 digest for ${archive_name}"
 
-  expected_checksum="$(awk -v name="${archive_name}" '$2 == name { print $1; exit }' "${temporary_dir}/SHA256SUMS")"
-  [ -n "${expected_checksum}" ] || fail "${archive_name} is missing from SHA256SUMS"
+  curl -fsSL --retry 3 --retry-delay 1 -o "${temporary_dir}/${archive_name}" "${download_base}/${archive_name}"
 
   if command -v sha256sum >/dev/null 2>&1; then
     actual_checksum="$(sha256sum "${temporary_dir}/${archive_name}" | awk '{ print $1 }')"
@@ -235,7 +264,7 @@ install_or_upgrade() {
   fi
 
   [ "${actual_checksum}" = "${expected_checksum}" ] || fail "checksum verification failed for ${archive_name}"
-  say "Checksum verified."
+  say "Checksum verified against GitHub release metadata."
 
   tar -xzf "${temporary_dir}/${archive_name}" -C "${temporary_dir}"
   source_binary="${temporary_dir}/${package_name}/${PROGRAM}"
