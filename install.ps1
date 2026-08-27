@@ -21,8 +21,11 @@ function Start-ManagedKnot {
         return
     }
 
-    Start-Process -FilePath $InstallPath -ArgumentList @("serve", "--addr", $ServerAddress)
-    Write-Host "Knot Server is starting at $ServerUrl."
+    Start-Process `
+        -FilePath $InstallPath `
+        -ArgumentList @("serve", "--addr", $ServerAddress, "--no-open") `
+        -WindowStyle Hidden
+    Write-Host "Knot Server is starting in the background at $ServerUrl."
 }
 
 function Stop-ManagedKnot {
