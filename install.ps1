@@ -16,6 +16,15 @@ $InstallPath = Join-Path $InstallDirectory "$Program.exe"
 $ServerAddress = if ($env:KNOT_ADDR) { $env:KNOT_ADDR } else { "127.0.0.1:7330" }
 $ServerUrl = "http://$ServerAddress"
 
+function Start-ManagedKnot {
+    if ($NoStart) {
+        return
+    }
+
+    Start-Process -FilePath $InstallPath -ArgumentList @("serve", "--addr", $ServerAddress)
+    Write-Host "Knot Server is starting at $ServerUrl."
+}
+
 function Stop-ManagedKnot {
     $normalizedInstallPath = [IO.Path]::GetFullPath($InstallPath)
     $managedProcesses = @(Get-Process -Name $Program -ErrorAction SilentlyContinue | Where-Object {
@@ -140,6 +149,7 @@ if (Test-Path -LiteralPath $InstallPath -PathType Leaf) {
 if ($CurrentVersion -eq $TargetVersion) {
     Write-Host "Knot $TargetVersion is already installed at $InstallPath."
     Update-UserPath $false
+    Start-ManagedKnot
     return
 }
 
@@ -192,8 +202,4 @@ finally {
 
 Update-UserPath $false
 Write-Host "Knot $TargetVersion installed at $InstallPath."
-
-if (-not $NoStart) {
-    Start-Process -FilePath $InstallPath -ArgumentList @("serve", "--addr", $ServerAddress)
-    Write-Host "Knot Server is starting at $ServerUrl."
-}
+Start-ManagedKnot
